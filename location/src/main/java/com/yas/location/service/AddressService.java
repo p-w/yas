@@ -1,6 +1,7 @@
 package com.yas.location.service;
 
 import com.yas.commonlibrary.exception.NotFoundException;
+import com.yas.commonlibrary.utils.AuthenticationUtils;
 import com.yas.location.model.Address;
 import com.yas.location.model.Country;
 import com.yas.location.repository.AddressRepository;
@@ -12,7 +13,11 @@ import com.yas.location.viewmodel.address.AddressDetailVm;
 import com.yas.location.viewmodel.address.AddressGetVm;
 import com.yas.location.viewmodel.address.AddressPostVm;
 import java.util.List;
+import java.util.Objects;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -20,6 +25,8 @@ import org.springframework.transaction.annotation.Transactional;
 @Transactional
 @RequiredArgsConstructor
 public class AddressService {
+
+    private static final String ADMIN_ROLE = "ROLE_ADMIN";
 
     private final AddressRepository addressRepository;
     private final StateOrProvinceRepository stateOrProvinceRepository;
@@ -39,6 +46,7 @@ public class AddressService {
     public void updateAddress(Long id, AddressPostVm dto) {
         Address address = addressRepository.findById(id).orElseThrow(() ->
             new NotFoundException(Constants.ErrorCode.ADDRESS_NOT_FOUND, id));
+        verifyOwner(address);
 
         address.setContactName(dto.contactName());
         address.setAddressLine1(dto.addressLine1());
@@ -55,18 +63,49 @@ public class AddressService {
 
     public List<AddressDetailVm> getAddressList(List<Long> ids) {
         List<Address> addressList = addressRepository.findAllByIdIn(ids);
-        return addressList.stream().map(address -> AddressDetailVm.fromModel(address)).toList();
+        if (!isAdmin()) {
+            String userId = AuthenticationUtils.extractUserId();
+            addressList = addressList.stream()
+                .filter(address -> Objects.equals(userId, address.getCreatedBy()))
+                .toList();
+        }
+        return addressList.stream().map(AddressDetailVm::fromModel).toList();
     }
 
     public AddressDetailVm getAddress(Long id) {
         Address address = addressRepository.findById(id).orElseThrow(() ->
             new NotFoundException(Constants.ErrorCode.ADDRESS_NOT_FOUND, id));
+        verifyOwner(address);
         return AddressDetailVm.fromModel(address);
     }
 
     public void deleteAddress(Long id) {
         Address address = addressRepository.findById(id).orElseThrow(() ->
             new NotFoundException(Constants.ErrorCode.ADDRESS_NOT_FOUND, id));
+        verifyOwner(address);
         addressRepository.delete(address);
+    }
+
+    private void verifyOwner(Address address) {
+        if (isAdmin()) {
+            return;
+        }
+        String userId = AuthenticationUtils.extractUserId();
+        if (!Objects.equals(userId, address.getCreatedBy())) {
+            throw new NotFoundException(Constants.ErrorCode.ADDRESS_NOT_FOUND, address.getId());
+        }
+    }
+
+    private boolean isAdmin() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null) {
+            return false;
+        }
+        for (GrantedAuthority authority : authentication.getAuthorities()) {
+            if (ADMIN_ROLE.equals(authority.getAuthority())) {
+                return true;
+            }
+        }
+        return false;
     }
 }
